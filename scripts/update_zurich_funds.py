@@ -132,6 +132,7 @@ def classify_funds(raw_funds):
             funds.append(
                 {
                     "rank": None,
+                    "investmentRank": None,
                     "band": "Unvalidated",
                     "code": code,
                     "name": fund.get("name", ""),
@@ -148,10 +149,12 @@ def classify_funds(raw_funds):
                     "oneYearAgoDate": None,
                     "previousYearLowPrice": None,
                     "previousYearLowDate": None,
+                    "distanceFromPreviousYearLowPct": None,
                     "days": None,
                     "validated": False,
                     "points": [],
                     "weeklyPoints": [],
+                    "dailyPoints": [],
                 }
             )
             continue
@@ -172,14 +175,21 @@ def classify_funds(raw_funds):
         return_3m = return_since(rows, end, 91)
         return_6m = return_since(rows, end, 182)
         previous_low = previous_calendar_year_low(rows, end)
+        distance_from_previous_low = (
+            (end["price"] / previous_low["price"] - 1) * 100
+            if previous_low and previous_low.get("price")
+            else None
+        )
         monthly = monthly_points(rows)
         weekly = weekly_points(rows)
         points = normalized_points(monthly)
         weekly_chart_points = normalized_points(weekly)
+        daily_chart_points = normalized_points(rows, label_length=10)
 
         funds.append(
             {
                 "rank": None,
+                "investmentRank": None,
                 "band": "",
                 "code": code,
                 "name": fund.get("name", ""),
@@ -196,6 +206,9 @@ def classify_funds(raw_funds):
                 "oneYearAgoDate": one_year_row["date"] if one_year_row else None,
                 "previousYearLowPrice": round(previous_low["price"], 4) if previous_low else None,
                 "previousYearLowDate": previous_low["date"] if previous_low else None,
+                "distanceFromPreviousYearLowPct": round(distance_from_previous_low, 2)
+                if distance_from_previous_low is not None
+                else None,
                 "days": (end_date - start_date).days,
                 "startDate": start["date"],
                 "endDate": end["date"],
@@ -204,6 +217,7 @@ def classify_funds(raw_funds):
                 "validated": True,
                 "points": points,
                 "weeklyPoints": weekly_chart_points,
+                "dailyPoints": daily_chart_points,
             }
         )
 
@@ -223,6 +237,17 @@ def classify_funds(raw_funds):
             fund["band"] = "Worst"
         else:
             fund["band"] = "Mediocre"
+
+    investment_ranked = sorted(
+        [
+            fund
+            for fund in funds
+            if fund["validated"] and fund["distanceFromPreviousYearLowPct"] is not None
+        ],
+        key=lambda fund: (fund["distanceFromPreviousYearLowPct"], fund["name"]),
+    )
+    for index, fund in enumerate(investment_ranked, start=1):
+        fund["investmentRank"] = index
 
     funds.sort(
         key=lambda fund: (

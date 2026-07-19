@@ -301,7 +301,8 @@
         </label>
         <label>Sort
           <select id="zurich-sort">
-            <option value="rank">Rank</option>
+            <option value="rank">Performance rank</option>
+            <option value="investmentRank">Investment rank</option>
             <option value="name">Name</option>
             <option value="return1w">1W return</option>
             <option value="return1m">1M return</option>
@@ -315,6 +316,7 @@
           <select id="zurich-chart-mode">
             <option value="monthly">Monthly</option>
             <option value="weekly">Weekly</option>
+            <option value="daily">Daily</option>
           </select>
         </label>
       </section>
@@ -342,6 +344,11 @@
     let payload = null;
 
     const fmtPct = value => value == null ? 'n/a' : `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`;
+    const fmtDistance = value => {
+      if (value == null) return 'n/a';
+      if (value < 0) return `${Math.abs(value).toFixed(1)}% below`;
+      return `${value.toFixed(1)}% above`;
+    };
     const fmtDays = days => days == null ? 'n/a' : days >= 700 ? '3Y' : `${Math.round(days / 30)}m`;
     const fmtPrice = (currency, price) => {
       if (price == null) return 'n/a';
@@ -404,18 +411,32 @@
       };
     }
 
+    function chartPointsFor(fund) {
+      if (chartMode.value === 'daily') {
+        const daily = fund.dailyPoints || [];
+        return daily.slice(Math.floor(daily.length * 0.75));
+      }
+      if (chartMode.value === 'weekly') {
+        const weekly = fund.weeklyPoints || fund.points || [];
+        return weekly.slice(Math.floor(weekly.length * 0.5));
+      }
+      return fund.points || [];
+    }
+
     function card(fund) {
       const cls = fund.band || 'Unvalidated';
-      const points = chartMode.value === 'weekly' ? (fund.weeklyPoints || fund.points || []) : (fund.points || []);
+      const points = chartPointsFor(fund);
       const ep = endPoint(points);
-      const chartLabel = chartMode.value === 'weekly' ? 'weekly' : 'monthly';
+      const chartLabel = chartMode.value;
+      const firstLabel = points[0]?.d || fund.startDate || '';
+      const lastLabel = points[points.length - 1]?.d || fund.endDate || '';
       const chart = fund.validated && points.length > 1
         ? `<svg viewBox="0 0 218 96" role="img" aria-label="${escapeHtml(fund.name)} normalized ${chartLabel} performance chart">
              <line class="axis" x1="7" y1="70" x2="211" y2="70"></line>
              <path class="spark" d="${pathFor(points)}"></path>
              ${ep ? `<circle class="end-dot" cx="${ep.x.toFixed(1)}" cy="${ep.y.toFixed(1)}" r="3"></circle>` : ''}
-             <text class="chart-label" x="7" y="90">${fund.startDate || ''}</text>
-             <text class="chart-label" x="211" y="90" text-anchor="end">${fund.endDate || ''}</text>
+             <text class="chart-label" x="7" y="90">${firstLabel}</text>
+             <text class="chart-label" x="211" y="90" text-anchor="end">${lastLabel}</text>
            </svg>`
         : '<div class="no-chart">History not validated</div>';
 
@@ -428,8 +449,8 @@
           <span class="badge">${cls}</span>
         </div>
         <div class="metrics">
-          <div><span>Return</span><strong>${fmtPct(fund.returnTotal)}</strong></div>
-          <div><span>1Y</span><strong>${fmtPct(fund.return1y)}</strong></div>
+          <div><span>Perf rank</span><strong>${fund.rank || 'n/a'}</strong></div>
+          <div><span>Inv rank</span><strong>${fund.investmentRank || 'n/a'}</strong></div>
           <div><span>Price</span><strong>${fund.currentPrice || 'n/a'}</strong></div>
         </div>
         <div class="periods">
@@ -441,10 +462,10 @@
         </div>
         <div class="price-refs">
           <div><span>1Y ago ${fund.oneYearAgoDate || ''}</span><strong>${fmtPrice(fund.currency, fund.oneYearAgoPrice)}</strong></div>
-          <div><span>Prev-year low ${fund.previousYearLowDate || ''}</span><strong>${fmtPrice(fund.currency, fund.previousYearLowPrice)}</strong></div>
+          <div><span>Prev-year low ${fund.previousYearLowDate || ''}</span><strong>${fmtPrice(fund.currency, fund.previousYearLowPrice)} · ${fmtDistance(fund.distanceFromPreviousYearLowPct)}</strong></div>
         </div>
         ${chart}
-        <div class="fund-code">Rank ${fund.rank || 'n/a'} · ${chartLabel} chart · window ${fmtDays(fund.days)} · price date ${fund.priceDate || 'n/a'}</div>
+        <div class="fund-code">Performance ${fund.rank || 'n/a'} · Investment ${fund.investmentRank || 'n/a'} · ${chartLabel} chart · window ${fmtDays(fund.days)} · price date ${fund.priceDate || 'n/a'}</div>
       </article>`;
     }
 
@@ -458,6 +479,7 @@
 
       funds.sort((a, b) => {
         if (sort.value === 'name') return a.name.localeCompare(b.name);
+        if (sort.value === 'investmentRank') return (a.investmentRank ?? 999999) - (b.investmentRank ?? 999999);
         if (sort.value === 'return1w') return (b.return1w ?? -999999) - (a.return1w ?? -999999);
         if (sort.value === 'return1m') return (b.return1m ?? -999999) - (a.return1m ?? -999999);
         if (sort.value === 'return3m') return (b.return3m ?? -999999) - (a.return3m ?? -999999);
