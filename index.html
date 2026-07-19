@@ -153,6 +153,32 @@
       color: var(--muted);
     }
     .metrics strong { font-weight: 600; }
+    .periods {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 4px;
+      margin: 8px 0;
+      font-size: 11px;
+    }
+    .periods div {
+      border-top: 1px solid #eef0f3;
+      padding-top: 5px;
+      min-width: 0;
+    }
+    .periods span, .price-refs span {
+      display: block;
+      color: var(--muted);
+    }
+    .periods strong, .price-refs strong {
+      font-weight: 600;
+    }
+    .price-refs {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 6px;
+      margin: 8px 0;
+      font-size: 12px;
+    }
     svg {
       width: 100%;
       height: 96px;
@@ -277,8 +303,18 @@
           <select id="zurich-sort">
             <option value="rank">Rank</option>
             <option value="name">Name</option>
+            <option value="return1w">1W return</option>
+            <option value="return1m">1M return</option>
+            <option value="return3m">3M return</option>
+            <option value="return6m">6M return</option>
             <option value="return1y">1Y return</option>
             <option value="days">History length</option>
+          </select>
+        </label>
+        <label>Chart
+          <select id="zurich-chart-mode">
+            <option value="monthly">Monthly</option>
+            <option value="weekly">Weekly</option>
           </select>
         </label>
       </section>
@@ -297,6 +333,7 @@
     const search = document.getElementById('zurich-search');
     const band = document.getElementById('zurich-band');
     const sort = document.getElementById('zurich-sort');
+    const chartMode = document.getElementById('zurich-chart-mode');
     const note = document.getElementById('zurich-note');
     const passwordInput = document.getElementById('dashboard-password');
     const unlockButton = document.getElementById('unlock-button');
@@ -306,6 +343,11 @@
 
     const fmtPct = value => value == null ? 'n/a' : `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`;
     const fmtDays = days => days == null ? 'n/a' : days >= 700 ? '3Y' : `${Math.round(days / 30)}m`;
+    const fmtPrice = (currency, price) => {
+      if (price == null) return 'n/a';
+      const symbol = { USD: '$', EUR: '€', GBP: '£' }[currency] || (currency ? `${currency} ` : '');
+      return `${symbol}${Number(price).toFixed(2)}`;
+    };
     const fmtTimestamp = value => {
       if (!value) return 'n/a';
       const date = new Date(value);
@@ -364,10 +406,11 @@
 
     function card(fund) {
       const cls = fund.band || 'Unvalidated';
-      const points = fund.points || [];
+      const points = chartMode.value === 'weekly' ? (fund.weeklyPoints || fund.points || []) : (fund.points || []);
       const ep = endPoint(points);
+      const chartLabel = chartMode.value === 'weekly' ? 'weekly' : 'monthly';
       const chart = fund.validated && points.length > 1
-        ? `<svg viewBox="0 0 218 96" role="img" aria-label="${escapeHtml(fund.name)} normalized performance chart">
+        ? `<svg viewBox="0 0 218 96" role="img" aria-label="${escapeHtml(fund.name)} normalized ${chartLabel} performance chart">
              <line class="axis" x1="7" y1="70" x2="211" y2="70"></line>
              <path class="spark" d="${pathFor(points)}"></path>
              ${ep ? `<circle class="end-dot" cx="${ep.x.toFixed(1)}" cy="${ep.y.toFixed(1)}" r="3"></circle>` : ''}
@@ -389,8 +432,19 @@
           <div><span>1Y</span><strong>${fmtPct(fund.return1y)}</strong></div>
           <div><span>Price</span><strong>${fund.currentPrice || 'n/a'}</strong></div>
         </div>
+        <div class="periods">
+          <div><span>1W</span><strong>${fmtPct(fund.return1w)}</strong></div>
+          <div><span>1M</span><strong>${fmtPct(fund.return1m)}</strong></div>
+          <div><span>3M</span><strong>${fmtPct(fund.return3m)}</strong></div>
+          <div><span>6M</span><strong>${fmtPct(fund.return6m)}</strong></div>
+          <div><span>1Y</span><strong>${fmtPct(fund.return1y)}</strong></div>
+        </div>
+        <div class="price-refs">
+          <div><span>1Y ago ${fund.oneYearAgoDate || ''}</span><strong>${fmtPrice(fund.currency, fund.oneYearAgoPrice)}</strong></div>
+          <div><span>Prev-year low ${fund.previousYearLowDate || ''}</span><strong>${fmtPrice(fund.currency, fund.previousYearLowPrice)}</strong></div>
+        </div>
         ${chart}
-        <div class="fund-code">Rank ${fund.rank || 'n/a'} · window ${fmtDays(fund.days)} · price date ${fund.priceDate || 'n/a'}</div>
+        <div class="fund-code">Rank ${fund.rank || 'n/a'} · ${chartLabel} chart · window ${fmtDays(fund.days)} · price date ${fund.priceDate || 'n/a'}</div>
       </article>`;
     }
 
@@ -404,6 +458,10 @@
 
       funds.sort((a, b) => {
         if (sort.value === 'name') return a.name.localeCompare(b.name);
+        if (sort.value === 'return1w') return (b.return1w ?? -999999) - (a.return1w ?? -999999);
+        if (sort.value === 'return1m') return (b.return1m ?? -999999) - (a.return1m ?? -999999);
+        if (sort.value === 'return3m') return (b.return3m ?? -999999) - (a.return3m ?? -999999);
+        if (sort.value === 'return6m') return (b.return6m ?? -999999) - (a.return6m ?? -999999);
         if (sort.value === 'return1y') return (b.return1y ?? -999999) - (a.return1y ?? -999999);
         if (sort.value === 'days') return (b.days ?? -1) - (a.days ?? -1);
         return (a.rank ?? 999999) - (b.rank ?? 999999);
@@ -483,6 +541,7 @@
     search.addEventListener('input', render);
     band.addEventListener('change', render);
     sort.addEventListener('change', render);
+    chartMode.addEventListener('change', render);
     unlockButton.addEventListener('click', unlock);
     passwordInput.addEventListener('keydown', event => {
       if (event.key === 'Enter') unlock();

@@ -6,8 +6,12 @@ import re
 from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
 
-from playwright.async_api import TimeoutError as PlaywrightTimeoutError
-from playwright.async_api import async_playwright
+try:
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+    from playwright.async_api import async_playwright
+except ModuleNotFoundError:
+    PlaywrightTimeoutError = TimeoutError
+    async_playwright = None
 
 
 SOURCE_URL = "https://digital.feprecisionplus.com/zilme/en-gb/ZILME"
@@ -40,6 +44,21 @@ def closest_on_or_before(rows, target_date):
     return best
 
 
+def return_since(rows, end, days):
+    target_row = closest_on_or_before(rows, date.fromisoformat(end["date"]) - timedelta(days=days))
+    if not target_row or not target_row.get("price"):
+        return None
+    return (end["price"] / target_row["price"] - 1) * 100
+
+
+def previous_calendar_year_low(rows, end):
+    previous_year = date.fromisoformat(end["date"]).year - 1
+    candidates = [row for row in rows if date.fromisoformat(row["date"]).year == previous_year]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda row: row["price"])
+
+
 def monthly_points(rows):
     by_month = {}
     for row in rows:
@@ -50,6 +69,36 @@ def monthly_points(rows):
     if rows and (not points or points[-1]["date"] != rows[-1]["date"]):
         points.append(rows[-1])
     return points
+
+
+def weekly_points(rows):
+    by_week = {}
+    for row in rows:
+        row_date = date.fromisoformat(row["date"])
+        year, week, _ = row_date.isocalendar()
+        by_week[f"{year}-W{week:02d}"] = row
+    points = [by_week[key] for key in sorted(by_week)]
+    if rows and (not points or points[0]["date"] != rows[0]["date"]):
+        points.insert(0, rows[0])
+    if rows and (not points or points[-1]["date"] != rows[-1]["date"]):
+        points.append(rows[-1])
+    return points
+
+
+def normalized_points(rows, label_length=7):
+    if not rows:
+        return []
+    first_price = rows[0]["price"]
+    if not first_price:
+        return []
+    return [
+        {
+            "d": row["date"][:label_length],
+            "v": round((row["price"] / first_price) * 100, 2),
+            "p": round(row["price"], 4),
+        }
+        for row in rows
+    ]
 
 
 def classify_funds(raw_funds):
@@ -90,10 +139,19 @@ def classify_funds(raw_funds):
                     "priceDate": fund.get("priceDate", ""),
                     "currency": "",
                     "returnTotal": None,
+                    "return1w": None,
+                    "return1m": None,
+                    "return3m": None,
+                    "return6m": None,
                     "return1y": None,
+                    "oneYearAgoPrice": None,
+                    "oneYearAgoDate": None,
+                    "previousYearLowPrice": None,
+                    "previousYearLowDate": None,
                     "days": None,
                     "validated": False,
                     "points": [],
+                    "weeklyPoints": [],
                 }
             )
             continue
@@ -109,16 +167,15 @@ def classify_funds(raw_funds):
             if one_year_row and one_year_row.get("price")
             else None
         )
+        return_1w = return_since(rows, end, 7)
+        return_1m = return_since(rows, end, 30)
+        return_3m = return_since(rows, end, 91)
+        return_6m = return_since(rows, end, 182)
+        previous_low = previous_calendar_year_low(rows, end)
         monthly = monthly_points(rows)
-        first_price = monthly[0]["price"]
-        points = [
-            {
-                "d": row["date"][:7],
-                "v": round((row["price"] / first_price) * 100, 2),
-                "p": round(row["price"], 4),
-            }
-            for row in monthly
-        ]
+        weekly = weekly_points(rows)
+        points = normalized_points(monthly)
+        weekly_chart_points = normalized_points(weekly)
 
         funds.append(
             {
@@ -130,7 +187,15 @@ def classify_funds(raw_funds):
                 "priceDate": fund.get("priceDate", ""),
                 "currency": end.get("currency", ""),
                 "returnTotal": round(return_total, 2) if return_total is not None else None,
+                "return1w": round(return_1w, 2) if return_1w is not None else None,
+                "return1m": round(return_1m, 2) if return_1m is not None else None,
+                "return3m": round(return_3m, 2) if return_3m is not None else None,
+                "return6m": round(return_6m, 2) if return_6m is not None else None,
                 "return1y": round(return_1y, 2) if return_1y is not None else None,
+                "oneYearAgoPrice": round(one_year_row["price"], 4) if one_year_row else None,
+                "oneYearAgoDate": one_year_row["date"] if one_year_row else None,
+                "previousYearLowPrice": round(previous_low["price"], 4) if previous_low else None,
+                "previousYearLowDate": previous_low["date"] if previous_low else None,
                 "days": (end_date - start_date).days,
                 "startDate": start["date"],
                 "endDate": end["date"],
@@ -138,6 +203,7 @@ def classify_funds(raw_funds):
                 "latestHistoryPrice": round(end["price"], 4),
                 "validated": True,
                 "points": points,
+                "weeklyPoints": weekly_chart_points,
             }
         )
 
@@ -276,6 +342,8 @@ async def scrape_history(page, fund):
 
 
 async def scrape_all(output_path):
+    if async_playwright is None:
+        raise RuntimeError("Playwright is required to refresh live Zurich fund data.")
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch()
         page = await browser.new_page(viewport={"width": 1440, "height": 1100})
