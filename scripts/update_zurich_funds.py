@@ -59,6 +59,86 @@ def previous_calendar_year_low(rows, end):
     return min(candidates, key=lambda row: row["price"])
 
 
+def moving_average(rows, length, end_index=None):
+    if end_index is None:
+        end_index = len(rows)
+    start_index = max(0, end_index - length)
+    window = rows[start_index:end_index]
+    if not window:
+        return None
+    return sum(row["price"] for row in window) / len(window)
+
+
+def clamp(value, minimum=0, maximum=100):
+    return max(minimum, min(maximum, value))
+
+
+def investment_components(rows, end, previous_low):
+    if not previous_low or not previous_low.get("price") or len(rows) < 20:
+        return {
+            "investmentScore": None,
+            "lowOpportunityScore": None,
+            "trendScore": None,
+            "dipRecoveryScore": None,
+            "movingAverageSignal": "n/a",
+            "recentDipBelowPreviousLow": False,
+            "recentDipDate": None,
+            "recentDipPrice": None,
+        }
+
+    latest_price = end["price"]
+    low_price = previous_low["price"]
+    distance_pct = (latest_price / low_price - 1) * 100
+
+    if distance_pct <= 0:
+        low_score = 100
+    else:
+        low_score = clamp(100 - distance_pct * 2)
+
+    ma20 = moving_average(rows, 20)
+    ma60 = moving_average(rows, 60)
+    prior_ma20 = moving_average(rows, 20, max(0, len(rows) - 20)) if len(rows) >= 40 else None
+    prior_end = max(0, len(rows) - 60)
+    prior_ma60 = moving_average(rows, 60, prior_end) if prior_end >= 20 else None
+    trend_score = 0
+    signal_parts = []
+
+    if ma20 and ma60:
+        alignment = (ma20 / ma60 - 1) * 100
+        trend_score += clamp(10 + alignment * 5, 0, 20)
+        signal_parts.append("20D>60D" if ma20 >= ma60 else "20D<60D")
+    if ma20 and prior_ma20:
+        slope20 = (ma20 / prior_ma20 - 1) * 100
+        trend_score += clamp(20 + slope20 * 10, 0, 40)
+        signal_parts.append("20D rising" if slope20 >= 0 else "20D falling")
+    if ma60 and prior_ma60:
+        slope = (ma60 / prior_ma60 - 1) * 100
+        trend_score += clamp(20 + slope * 10, 0, 40)
+        signal_parts.append("60D rising" if slope >= 0 else "60D falling")
+    trend_score = clamp(trend_score)
+
+    recent_rows = rows[-60:]
+    below_low = [row for row in recent_rows if row["price"] <= low_price]
+    recent_dip = min(below_low, key=lambda row: row["price"]) if below_low else None
+    if recent_dip:
+        recovery_pct = (latest_price / recent_dip["price"] - 1) * 100 if recent_dip["price"] else 0
+        dip_score = clamp(70 + recovery_pct * 3)
+    else:
+        dip_score = clamp(60 - max(0, distance_pct) * 2)
+
+    total = low_score * 0.45 + trend_score * 0.35 + dip_score * 0.20
+    return {
+        "investmentScore": round(total, 2),
+        "lowOpportunityScore": round(low_score, 2),
+        "trendScore": round(trend_score, 2),
+        "dipRecoveryScore": round(dip_score, 2),
+        "movingAverageSignal": " · ".join(signal_parts) if signal_parts else "n/a",
+        "recentDipBelowPreviousLow": bool(recent_dip),
+        "recentDipDate": recent_dip["date"] if recent_dip else None,
+        "recentDipPrice": round(recent_dip["price"], 4) if recent_dip else None,
+    }
+
+
 def monthly_points(rows):
     by_month = {}
     for row in rows:
@@ -150,6 +230,14 @@ def classify_funds(raw_funds):
                     "previousYearLowPrice": None,
                     "previousYearLowDate": None,
                     "distanceFromPreviousYearLowPct": None,
+                    "investmentScore": None,
+                    "lowOpportunityScore": None,
+                    "trendScore": None,
+                    "dipRecoveryScore": None,
+                    "movingAverageSignal": "n/a",
+                    "recentDipBelowPreviousLow": False,
+                    "recentDipDate": None,
+                    "recentDipPrice": None,
                     "days": None,
                     "validated": False,
                     "points": [],
@@ -180,6 +268,7 @@ def classify_funds(raw_funds):
             if previous_low and previous_low.get("price")
             else None
         )
+        invest = investment_components(rows, end, previous_low)
         monthly = monthly_points(rows)
         weekly = weekly_points(rows)
         points = normalized_points(monthly)
@@ -209,6 +298,7 @@ def classify_funds(raw_funds):
                 "distanceFromPreviousYearLowPct": round(distance_from_previous_low, 2)
                 if distance_from_previous_low is not None
                 else None,
+                **invest,
                 "days": (end_date - start_date).days,
                 "startDate": start["date"],
                 "endDate": end["date"],
@@ -242,9 +332,9 @@ def classify_funds(raw_funds):
         [
             fund
             for fund in funds
-            if fund["validated"] and fund["distanceFromPreviousYearLowPct"] is not None
+            if fund["validated"] and fund["investmentScore"] is not None
         ],
-        key=lambda fund: (fund["distanceFromPreviousYearLowPct"], fund["name"]),
+        key=lambda fund: (-fund["investmentScore"], fund["name"]),
     )
     for index, fund in enumerate(investment_ranked, start=1):
         fund["investmentRank"] = index

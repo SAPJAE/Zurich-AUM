@@ -179,6 +179,12 @@
       margin: 8px 0;
       font-size: 12px;
     }
+    .signal-line {
+      color: var(--muted);
+      font-size: 12px;
+      margin: 6px 0;
+      overflow-wrap: anywhere;
+    }
     svg {
       width: 100%;
       height: 96px;
@@ -349,6 +355,7 @@
       if (value < 0) return `${Math.abs(value).toFixed(1)}% below`;
       return `${value.toFixed(1)}% above`;
     };
+    const fmtScore = value => value == null ? 'n/a' : Number(value).toFixed(1);
     const fmtDays = days => days == null ? 'n/a' : days >= 700 ? '3Y' : `${Math.round(days / 30)}m`;
     const fmtPrice = (currency, price) => {
       if (price == null) return 'n/a';
@@ -451,7 +458,7 @@
         <div class="metrics">
           <div><span>Perf rank</span><strong>${fund.rank || 'n/a'}</strong></div>
           <div><span>Inv rank</span><strong>${fund.investmentRank || 'n/a'}</strong></div>
-          <div><span>Price</span><strong>${fund.currentPrice || 'n/a'}</strong></div>
+          <div><span>Inv score</span><strong>${fmtScore(fund.investmentScore)}</strong></div>
         </div>
         <div class="periods">
           <div><span>1W</span><strong>${fmtPct(fund.return1w)}</strong></div>
@@ -464,6 +471,7 @@
           <div><span>1Y ago ${fund.oneYearAgoDate || ''}</span><strong>${fmtPrice(fund.currency, fund.oneYearAgoPrice)}</strong></div>
           <div><span>Prev-year low ${fund.previousYearLowDate || ''}</span><strong>${fmtPrice(fund.currency, fund.previousYearLowPrice)} · ${fmtDistance(fund.distanceFromPreviousYearLowPct)}</strong></div>
         </div>
+        <div class="signal-line">MA: ${escapeHtml(fund.movingAverageSignal || 'n/a')} · low ${fmtScore(fund.lowOpportunityScore)} · trend ${fmtScore(fund.trendScore)} · dip ${fmtScore(fund.dipRecoveryScore)}</div>
         ${chart}
         <div class="fund-code">Performance ${fund.rank || 'n/a'} · Investment ${fund.investmentRank || 'n/a'} · ${chartLabel} chart · window ${fmtDays(fund.days)} · price date ${fund.priceDate || 'n/a'}</div>
       </article>`;
