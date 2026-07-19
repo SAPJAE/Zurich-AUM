@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Zurich UAE Fund Performance Dashboard</title>
+  <style>
+    :root {
+      --good: #167a5a;
+      --mid: #6d625a;
+      --bad: #b14242;
+      --muted: #667085;
+      --line: #d0d5dd;
+      --paper: #ffffff;
+      --ink: #1d2939;
+      --soft: #f7f7f4;
+      --accent: #216e8a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, Segoe UI, Arial, sans-serif;
+      color: var(--ink);
+      background: var(--soft);
+    }
+    main { padding: 18px; }
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: space-between;
+      align-items: end;
+      margin-bottom: 14px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      font-weight: 600;
+    }
+    .source-link {
+      color: var(--accent);
+      text-decoration-thickness: 1px;
+      text-underline-offset: 3px;
+    }
+    .summary-bar {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .summary-bar div {
+      background: var(--paper);
+      border: 1px solid #e4e7ec;
+      border-radius: 8px;
+      padding: 12px;
+      min-width: 0;
+    }
+    .summary-bar strong {
+      display: block;
+      font-size: 24px;
+      font-weight: 600;
+    }
+    .summary-bar span, .note {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: end;
+      margin-bottom: 10px;
+    }
+    label {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    input, select {
+      min-width: 170px;
+      border: 1px solid #d0d5dd;
+      border-radius: 6px;
+      padding: 8px 9px;
+      background: var(--paper);
+      color: var(--ink);
+    }
+    .note { margin: 6px 0 14px; }
+    .chart-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(238px, 1fr));
+      gap: 10px;
+    }
+    .fund-card {
+      background: var(--paper);
+      border: 1px solid #e4e7ec;
+      border-radius: 8px;
+      padding: 10px;
+      min-width: 0;
+    }
+    .fund-head {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: start;
+    }
+    .fund-name {
+      font-weight: 600;
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+    .fund-code {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 2px;
+    }
+    .badge {
+      border: 1px solid currentColor;
+      border-radius: 999px;
+      padding: 2px 7px;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .Best .badge { color: var(--good); }
+    .Mediocre .badge { color: var(--mid); }
+    .Worst .badge { color: var(--bad); }
+    .Unvalidated .badge { color: var(--muted); }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+      margin: 8px 0;
+      font-size: 12px;
+    }
+    .metrics span {
+      display: block;
+      color: var(--muted);
+    }
+    .metrics strong { font-weight: 600; }
+    svg {
+      width: 100%;
+      height: 96px;
+      display: block;
+      overflow: visible;
+    }
+    .axis {
+      stroke: var(--line);
+      stroke-width: 1;
+    }
+    .spark {
+      fill: none;
+      stroke-width: 2;
+    }
+    .Best .spark { stroke: var(--good); }
+    .Mediocre .spark { stroke: var(--accent); }
+    .Worst .spark { stroke: var(--bad); }
+    .end-dot { fill: currentColor; }
+    .chart-label {
+      font-size: 11px;
+      fill: var(--muted);
+    }
+    .no-chart {
+      height: 96px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      font-size: 12px;
+      border-top: 1px solid #eef0f3;
+      border-bottom: 1px solid #eef0f3;
+    }
+    .error {
+      color: var(--bad);
+      background: var(--paper);
+      border: 1px solid #e4e7ec;
+      border-radius: 8px;
+      padding: 12px;
+    }
+    @media (max-width: 640px) {
+      main { padding: 12px; }
+      .summary-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      input, select {
+        min-width: 0;
+        width: 100%;
+      }
+      label { flex: 1 1 100%; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>Zurich UAE Fund Performance</h1>
+        <div class="note">Live-fund list and price histories from Zurich UAE / FE fundinfo.</div>
+      </div>
+      <a class="source-link" href="https://digital.feprecisionplus.com/zilme/en-gb/ZILME">Source fund centre</a>
+    </header>
+
+    <section class="summary-bar" aria-label="Zurich UAE fund performance summary">
+      <div><strong id="fund-count">...</strong><span>live funds</span></div>
+      <div><strong id="validated-count">...</strong><span>validated charts</span></div>
+      <div><strong id="quartile-size">...</strong><span>best / worst quartile size</span></div>
+      <div><strong id="source-date">...</strong><span>fund-centre price date</span></div>
+    </section>
+
+    <section class="controls" aria-label="Chart controls">
+      <label>Search <input id="zurich-search" type="search" placeholder="Fund name or code"></label>
+      <label>Group
+        <select id="zurich-band">
+          <option value="all">All groups</option>
+          <option>Best</option>
+          <option>Mediocre</option>
+          <option>Worst</option>
+          <option>Unvalidated</option>
+        </select>
+      </label>
+      <label>Sort
+        <select id="zurich-sort">
+          <option value="rank">Rank</option>
+          <option value="name">Name</option>
+          <option value="return1y">1Y return</option>
+          <option value="days">History length</option>
+        </select>
+      </label>
+    </section>
+
+    <div class="note" id="zurich-note">Loading data...</div>
+    <section id="zurich-grid" class="chart-grid" aria-label="Small performance charts"></section>
+  </main>
+
+  <script>
+    const grid = document.getElementById('zurich-grid');
+    const search = document.getElementById('zurich-search');
+    const band = document.getElementById('zurich-band');
+    const sort = document.getElementById('zurich-sort');
+    const note = document.getElementById('zurich-note');
+    let payload = null;
+
+    const fmtPct = value => value == null ? 'n/a' : `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`;
+    const fmtDays = days => days == null ? 'n/a' : days >= 700 ? '3Y' : `${Math.round(days / 30)}m`;
+
+    function escapeHtml(value) {
+      return String(value || '').replace(/[&<>"']/g, char => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+      }[char]));
+    }
+
+    function pathFor(points) {
+      if (!points || points.length < 2) return '';
+      const width = 218;
+      const height = 70;
+      const pad = 7;
+      const values = points.map(point => point.v);
+      let min = Math.min(...values);
+      let max = Math.max(...values);
+      if (min === max) {
+        min -= 1;
+        max += 1;
+      }
+      return points.map((point, index) => {
+        const x = pad + (index / (points.length - 1)) * (width - pad * 2);
+        const y = pad + (1 - (point.v - min) / (max - min)) * (height - pad * 2);
+        return `${index ? 'L' : 'M'}${x.toFixed(1)} ${y.toFixed(1)}`;
+      }).join(' ');
+    }
+
+    function endPoint(points) {
+      if (!points || !points.length) return null;
+      const width = 218;
+      const height = 70;
+      const pad = 7;
+      const values = points.map(point => point.v);
+      let min = Math.min(...values);
+      let max = Math.max(...values);
+      if (min === max) {
+        min -= 1;
+        max += 1;
+      }
+      const index = points.length - 1;
+      const point = points[index];
+      return {
+        x: pad + (index / (points.length - 1)) * (width - pad * 2),
+        y: pad + (1 - (point.v - min) / (max - min)) * (height - pad * 2)
+      };
+    }
+
+    function card(fund) {
+      const cls = fund.band || 'Unvalidated';
+      const points = fund.points || [];
+      const ep = endPoint(points);
+      const chart = fund.validated && points.length > 1
+        ? `<svg viewBox="0 0 218 96" role="img" aria-label="${escapeHtml(fund.name)} normalized performance chart">
+             <line class="axis" x1="7" y1="70" x2="211" y2="70"></line>
+             <path class="spark" d="${pathFor(points)}"></path>
+             ${ep ? `<circle class="end-dot" cx="${ep.x.toFixed(1)}" cy="${ep.y.toFixed(1)}" r="3"></circle>` : ''}
+             <text class="chart-label" x="7" y="90">${fund.startDate || ''}</text>
+             <text class="chart-label" x="211" y="90" text-anchor="end">${fund.endDate || ''}</text>
+           </svg>`
+        : '<div class="no-chart">History not validated</div>';
+
+      return `<article class="fund-card ${cls}">
+        <div class="fund-head">
+          <div>
+            <div class="fund-name">${escapeHtml(fund.name)}</div>
+            <div class="fund-code">${fund.code}</div>
+          </div>
+          <span class="badge">${cls}</span>
+        </div>
+        <div class="metrics">
+          <div><span>Return</span><strong>${fmtPct(fund.returnTotal)}</strong></div>
+          <div><span>1Y</span><strong>${fmtPct(fund.return1y)}</strong></div>
+          <div><span>Price</span><strong>${fund.currentPrice || 'n/a'}</strong></div>
+        </div>
+        ${chart}
+        <div class="fund-code">Rank ${fund.rank || 'n/a'} · window ${fmtDays(fund.days)} · price date ${fund.priceDate || 'n/a'}</div>
+      </article>`;
+    }
+
+    function render() {
+      if (!payload) return;
+      const query = search.value.trim().toLowerCase();
+      let funds = payload.funds.filter(fund => (
+        (band.value === 'all' || fund.band === band.value) &&
+        (!query || `${fund.name} ${fund.code}`.toLowerCase().includes(query))
+      ));
+
+      funds.sort((a, b) => {
+        if (sort.value === 'name') return a.name.localeCompare(b.name);
+        if (sort.value === 'return1y') return (b.return1y ?? -999999) - (a.return1y ?? -999999);
+        if (sort.value === 'days') return (b.days ?? -1) - (a.days ?? -1);
+        return (a.rank ?? 999999) - (b.rank ?? 999999);
+      });
+
+      const summary = payload.summary || {};
+      note.textContent = `${funds.length} shown. Ranked using the Zurich/FE price-history window; 5Y returned no rows in the source tool, so charts use the validated 3Y/available history through ${summary.sourceAsOf || 'the latest source date'}.`;
+      grid.innerHTML = funds.map(card).join('');
+    }
+
+    async function load() {
+      try {
+        const response = await fetch('data/funds.json', { cache: 'no-store' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        payload = await response.json();
+        const summary = payload.summary || {};
+        document.getElementById('fund-count').textContent = summary.liveFundCount ?? payload.funds.length;
+        document.getElementById('validated-count').textContent = summary.validatedChartCount ?? payload.funds.filter(fund => fund.validated).length;
+        document.getElementById('quartile-size').textContent = Math.ceil((summary.validatedChartCount || 0) * 0.25);
+        document.getElementById('source-date').textContent = summary.sourceAsOf || 'n/a';
+        render();
+      } catch (error) {
+        note.className = 'error';
+        note.textContent = `Could not load data/funds.json: ${error.message}`;
+      }
+    }
+
+    search.addEventListener('input', render);
+    band.addEventListener('change', render);
+    sort.addEventListener('change', render);
+    load();
+  </script>
+</body>
+</html>
