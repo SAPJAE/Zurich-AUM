@@ -87,6 +87,21 @@
       color: var(--ink);
     }
     .note { margin: 6px 0 14px; }
+    .status-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+      margin: 6px 0 14px;
+    }
+    .status-row .note { margin: 0; }
+    .refresh-link {
+      color: var(--accent);
+      font-size: 13px;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 3px;
+    }
     .chart-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(238px, 1fr));
@@ -268,7 +283,10 @@
         </label>
       </section>
 
-      <div class="note" id="zurich-note">Waiting for password...</div>
+      <div class="status-row">
+        <div class="note" id="zurich-note">Waiting for password...</div>
+        <a class="refresh-link" href="https://github.com/SAPJAE/Zurich-AUM/actions/workflows/refresh.yml">Manual refresh</a>
+      </div>
       <section id="zurich-grid" class="chart-grid" aria-label="Small performance charts"></section>
     </div>
   </main>
@@ -288,6 +306,12 @@
 
     const fmtPct = value => value == null ? 'n/a' : `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`;
     const fmtDays = days => days == null ? 'n/a' : days >= 700 ? '3Y' : `${Math.round(days / 30)}m`;
+    const fmtTimestamp = value => {
+      if (!value) return 'n/a';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return `${date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}`;
+    };
 
     function escapeHtml(value) {
       return String(value || '').replace(/[&<>"']/g, char => ({
@@ -386,7 +410,7 @@
       });
 
       const summary = payload.summary || {};
-      note.textContent = `${funds.length} shown. Ranked using the Zurich/FE price-history window; 5Y returned no rows in the source tool, so charts use the validated 3Y/available history through ${summary.sourceAsOf || 'the latest source date'}.`;
+      note.textContent = `${funds.length} shown. Dashboard refreshed ${fmtTimestamp(summary.refreshedAtUtc)}; fund-centre price date ${summary.sourceAsOf || 'n/a'}.`;
       grid.innerHTML = funds.map(card).join('');
     }
 

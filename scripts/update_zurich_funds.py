@@ -3,7 +3,7 @@ import asyncio
 import json
 import math
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -168,6 +168,7 @@ def classify_funds(raw_funds):
     price_dates = sorted({fund.get("priceDate") for fund in funds if fund.get("priceDate")})
     summary = {
         "generatedOn": date.today().isoformat(),
+        "refreshedAtUtc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "sourceAsOf": price_dates[-1] if price_dates else "n/a",
         "liveFundCount": len(funds),
         "validatedChartCount": len(ranked),

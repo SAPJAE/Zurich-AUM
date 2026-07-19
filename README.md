@@ -31,6 +31,11 @@ The workflow runs Monday to Friday at `03:20 UTC` and can also be started manual
 
 The workflow requires a repository secret named `DASHBOARD_PASSWORD`. The page prompts for the same password before decrypting and showing the fund data.
 
+The dashboard shows two dates after unlock:
+
+- **Dashboard refreshed**: when the GitHub Action or local script last rebuilt the encrypted data file.
+- **Fund-centre price date**: the latest source price date reported by Zurich/FE fundinfo.
+
 ## Data Note
 
 The FE fundinfo Download Tool did not return 5-year price rows during the initial build, so the dashboard uses the validated 3-year or available price-history window.
