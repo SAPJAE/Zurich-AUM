@@ -12,8 +12,9 @@ Self-updating static dashboard for Zurich UAE fund-centre funds.
 ## Files
 
 - `index.html` renders the dashboard.
-- `data/funds.json` contains the latest fund data used by the dashboard.
+- `data/funds.enc.json` contains encrypted fund data used by the dashboard.
 - `scripts/update_zurich_funds.py` refreshes the data from Zurich/FE fundinfo.
+- `scripts/encrypt_funds.py` encrypts refreshed data with `DASHBOARD_PASSWORD`.
 - `.github/workflows/refresh.yml` runs the refresh automatically on GitHub Actions.
 
 ## GitHub Pages Setup
@@ -27,6 +28,8 @@ Self-updating static dashboard for Zurich UAE fund-centre funds.
 ## Refresh Schedule
 
 The workflow runs Monday to Friday at `03:20 UTC` and can also be started manually from **Actions > Refresh Zurich fund data > Run workflow**.
+
+The workflow requires a repository secret named `DASHBOARD_PASSWORD`. The page prompts for the same password before decrypting and showing the fund data.
 
 ## Data Note
 

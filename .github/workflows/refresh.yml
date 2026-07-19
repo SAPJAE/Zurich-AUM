@@ -27,14 +27,21 @@ jobs:
       - name: Install scraper dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install playwright
+          python -m pip install playwright cryptography
           python -m playwright install --with-deps chromium
 
       - name: Refresh fund data
-        run: python scripts/update_zurich_funds.py --output data/funds.json
+        run: python scripts/update_zurich_funds.py --output data/funds.raw.json
+
+      - name: Encrypt fund data
+        env:
+          DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
+        run: |
+          python scripts/encrypt_funds.py --input data/funds.raw.json --output data/funds.enc.json
+          rm data/funds.raw.json
 
       - name: Commit refreshed data
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "data: refresh Zurich fund data"
-          file_pattern: data/funds.json
+          file_pattern: data/funds.enc.json

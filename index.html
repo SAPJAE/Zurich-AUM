@@ -177,6 +177,38 @@
       border-radius: 8px;
       padding: 12px;
     }
+    .auth-panel {
+      max-width: 420px;
+      background: var(--paper);
+      border: 1px solid #e4e7ec;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .auth-panel h2 {
+      margin: 0 0 8px;
+      font-size: 18px;
+      font-weight: 600;
+    }
+    .auth-row {
+      display: flex;
+      gap: 8px;
+      align-items: end;
+    }
+    .auth-row label { flex: 1; }
+    button {
+      border: 1px solid #d0d5dd;
+      border-radius: 6px;
+      padding: 8px 12px;
+      background: var(--ink);
+      color: var(--paper);
+      cursor: pointer;
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: wait;
+    }
+    .locked .dashboard-content { display: none; }
     @media (max-width: 640px) {
       main { padding: 12px; }
       .summary-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -198,44 +230,60 @@
       <a class="source-link" href="https://digital.feprecisionplus.com/zilme/en-gb/ZILME">Source fund centre</a>
     </header>
 
-    <section class="summary-bar" aria-label="Zurich UAE fund performance summary">
-      <div><strong id="fund-count">...</strong><span>live funds</span></div>
-      <div><strong id="validated-count">...</strong><span>validated charts</span></div>
-      <div><strong id="quartile-size">...</strong><span>best / worst quartile size</span></div>
-      <div><strong id="source-date">...</strong><span>fund-centre price date</span></div>
+    <section class="auth-panel" id="auth-panel" aria-label="Dashboard password">
+      <h2>Enter password</h2>
+      <div class="auth-row">
+        <label>Password <input id="dashboard-password" type="password" autocomplete="current-password"></label>
+        <button id="unlock-button" type="button">Unlock</button>
+      </div>
+      <div class="note" id="auth-note">Password is required to decrypt the dashboard data.</div>
     </section>
 
-    <section class="controls" aria-label="Chart controls">
-      <label>Search <input id="zurich-search" type="search" placeholder="Fund name or code"></label>
-      <label>Group
-        <select id="zurich-band">
-          <option value="all">All groups</option>
-          <option>Best</option>
-          <option>Mediocre</option>
-          <option>Worst</option>
-          <option>Unvalidated</option>
-        </select>
-      </label>
-      <label>Sort
-        <select id="zurich-sort">
-          <option value="rank">Rank</option>
-          <option value="name">Name</option>
-          <option value="return1y">1Y return</option>
-          <option value="days">History length</option>
-        </select>
-      </label>
-    </section>
+    <div class="dashboard-content">
+      <section class="summary-bar" aria-label="Zurich UAE fund performance summary">
+        <div><strong id="fund-count">...</strong><span>live funds</span></div>
+        <div><strong id="validated-count">...</strong><span>validated charts</span></div>
+        <div><strong id="quartile-size">...</strong><span>best / worst quartile size</span></div>
+        <div><strong id="source-date">...</strong><span>fund-centre price date</span></div>
+      </section>
 
-    <div class="note" id="zurich-note">Loading data...</div>
-    <section id="zurich-grid" class="chart-grid" aria-label="Small performance charts"></section>
+      <section class="controls" aria-label="Chart controls">
+        <label>Search <input id="zurich-search" type="search" placeholder="Fund name or code"></label>
+        <label>Group
+          <select id="zurich-band">
+            <option value="all">All groups</option>
+            <option>Best</option>
+            <option>Mediocre</option>
+            <option>Worst</option>
+            <option>Unvalidated</option>
+          </select>
+        </label>
+        <label>Sort
+          <select id="zurich-sort">
+            <option value="rank">Rank</option>
+            <option value="name">Name</option>
+            <option value="return1y">1Y return</option>
+            <option value="days">History length</option>
+          </select>
+        </label>
+      </section>
+
+      <div class="note" id="zurich-note">Waiting for password...</div>
+      <section id="zurich-grid" class="chart-grid" aria-label="Small performance charts"></section>
+    </div>
   </main>
 
   <script>
+    document.body.classList.add('locked');
     const grid = document.getElementById('zurich-grid');
     const search = document.getElementById('zurich-search');
     const band = document.getElementById('zurich-band');
     const sort = document.getElementById('zurich-sort');
     const note = document.getElementById('zurich-note');
+    const passwordInput = document.getElementById('dashboard-password');
+    const unlockButton = document.getElementById('unlock-button');
+    const authPanel = document.getElementById('auth-panel');
+    const authNote = document.getElementById('auth-note');
     let payload = null;
 
     const fmtPct = value => value == null ? 'n/a' : `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`;
@@ -342,27 +390,79 @@
       grid.innerHTML = funds.map(card).join('');
     }
 
-    async function load() {
+    function fromBase64Url(value) {
+      const padded = value + '='.repeat((4 - value.length % 4) % 4);
+      const binary = atob(padded.replace(/-/g, '+').replace(/_/g, '/'));
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+      }
+      return bytes;
+    }
+
+    async function decryptPayload(encrypted, password) {
+      const encoder = new TextEncoder();
+      const keyMaterial = await crypto.subtle.importKey(
+        'raw',
+        encoder.encode(password),
+        'PBKDF2',
+        false,
+        ['deriveKey']
+      );
+      const key = await crypto.subtle.deriveKey(
+        {
+          name: 'PBKDF2',
+          hash: 'SHA-256',
+          salt: fromBase64Url(encrypted.salt),
+          iterations: encrypted.iterations
+        },
+        keyMaterial,
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['decrypt']
+      );
+      const plaintext = await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: fromBase64Url(encrypted.iv) },
+        key,
+        fromBase64Url(encrypted.ciphertext)
+      );
+      return JSON.parse(new TextDecoder().decode(plaintext));
+    }
+
+    async function unlock() {
+      const password = passwordInput.value;
+      if (!password) {
+        authNote.textContent = 'Enter the dashboard password.';
+        return;
+      }
+      unlockButton.disabled = true;
+      authNote.textContent = 'Decrypting...';
       try {
-        const response = await fetch('data/funds.json', { cache: 'no-store' });
+        const response = await fetch('data/funds.enc.json', { cache: 'no-store' });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        payload = await response.json();
+        const encrypted = await response.json();
+        payload = await decryptPayload(encrypted, password);
         const summary = payload.summary || {};
         document.getElementById('fund-count').textContent = summary.liveFundCount ?? payload.funds.length;
         document.getElementById('validated-count').textContent = summary.validatedChartCount ?? payload.funds.filter(fund => fund.validated).length;
         document.getElementById('quartile-size').textContent = Math.ceil((summary.validatedChartCount || 0) * 0.25);
         document.getElementById('source-date').textContent = summary.sourceAsOf || 'n/a';
+        document.body.classList.remove('locked');
+        authPanel.style.display = 'none';
         render();
       } catch (error) {
-        note.className = 'error';
-        note.textContent = `Could not load data/funds.json: ${error.message}`;
+        authNote.textContent = 'Password did not unlock the dashboard.';
+        unlockButton.disabled = false;
       }
     }
 
     search.addEventListener('input', render);
     band.addEventListener('change', render);
     sort.addEventListener('change', render);
-    load();
+    unlockButton.addEventListener('click', unlock);
+    passwordInput.addEventListener('keydown', event => {
+      if (event.key === 'Enter') unlock();
+    });
   </script>
 </body>
 </html>
