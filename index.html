@@ -548,10 +548,11 @@
         return;
       }
       unlockButton.disabled = true;
-      authNote.textContent = 'Decrypting...';
+      authNote.textContent = 'Downloading encrypted data. First load can take up to a minute.';
       try {
         const response = await fetch('data/funds.enc.json', { cache: 'no-store' });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        authNote.textContent = 'Decrypting data. Please keep this tab open.';
         const encrypted = await response.json();
         payload = await decryptPayload(encrypted, password);
         const summary = payload.summary || {};
@@ -560,6 +561,7 @@
         document.getElementById('quartile-size').textContent = Math.ceil((summary.validatedChartCount || 0) * 0.25);
         document.getElementById('source-date').textContent = summary.sourceAsOf || 'n/a';
         document.body.classList.remove('locked');
+        authNote.textContent = 'Unlocked.';
         authPanel.style.display = 'none';
         render();
       } catch (error) {
