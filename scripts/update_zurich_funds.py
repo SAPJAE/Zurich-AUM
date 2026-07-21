@@ -16,6 +16,7 @@ except ModuleNotFoundError:
 
 SOURCE_URL = "https://digital.feprecisionplus.com/zilme/en-gb/ZILME"
 DOWNLOAD_URL = "https://digital.feprecisionplus.com/zilme/en-gb/ZILME/DownloadTool?citicode={code}&historyType=price"
+MIN_EXPECTED_FUNDS = 150
 
 
 def numeric_from_display(value):
@@ -31,6 +32,16 @@ def parse_display_date(value):
         except ValueError:
             pass
     return None
+
+
+def display_date(value):
+    parsed = parse_display_date(value)
+    if parsed:
+        return parsed.strftime("%d %b %Y")
+    try:
+        return date.fromisoformat(str(value)).strftime("%d %b %Y")
+    except ValueError:
+        return str(value or "").strip()
 
 
 def closest_on_or_before(rows, target_date):
@@ -363,12 +374,70 @@ def classify_funds(raw_funds):
 
 async def scrape_live_funds(page):
     await page.goto(SOURCE_URL, wait_until="domcontentloaded", timeout=90_000)
-    await page.wait_for_timeout(5_000)
+    print(f"Loaded {page.url}", flush=True)
+    print(f"Page title: {await page.title()}", flush=True)
 
-    return await page.evaluate(
+    try:
+        await page.wait_for_function(
+            """
+            () => [...document.querySelectorAll('select.downloadtool_funds option')]
+              .filter(option => option.value && option.value !== 'AllFunds').length >= 150
+            """,
+            timeout=60_000,
+        )
+    except PlaywrightTimeoutError:
+        print("Timed out waiting for Download Tool fund options; trying rendered fund rows.", flush=True)
+
+    funds = await page.evaluate(
         """
         () => {
           const text = value => String(value || '').replace(/\\s+/g, ' ').trim();
+          const optionRows = [...document.querySelectorAll('select.downloadtool_funds option')]
+            .map(option => ({
+              name: text(option.textContent),
+              fundCentreCode: text(option.value),
+              productType: '',
+              price: '',
+              priceDate: '',
+              changePct: ''
+            }))
+            .filter(row => row.name && row.fundCentreCode && row.fundCentreCode !== 'AllFunds');
+
+          if (optionRows.length) {
+            const seenOptions = new Set();
+            return optionRows.filter(row => {
+              if (seenOptions.has(row.fundCentreCode)) return false;
+              seenOptions.add(row.fundCentreCode);
+              return true;
+            });
+          }
+
+          const cardRows = [...document.querySelectorAll('.minFsData')].map(card => {
+            const name = text(card.querySelector('.fe-column-name')?.innerText);
+            const code = text(card.querySelector('[data-code]')?.getAttribute('data-code'));
+            const rawText = card.innerText || '';
+            const priceMatch = rawText.match(/[€£$]\\s?[-+]?\\d[\\d,]*(?:\\.\\d+)?/);
+            const dateMatch = rawText.match(/\\d{1,2}\\s[A-Za-z]{3}\\s\\d{4}/);
+            const changeMatch = rawText.match(/Change \\(%\\)\\s*([-+]?\\d+(?:\\.\\d+)?)/);
+            return {
+              name,
+              fundCentreCode: code,
+              productType: '',
+              price: priceMatch ? priceMatch[0] : '',
+              priceDate: dateMatch ? dateMatch[0] : '',
+              changePct: changeMatch ? changeMatch[1] : ''
+            };
+          }).filter(row => row.name && row.fundCentreCode);
+
+          if (cardRows.length) {
+            const seenCards = new Set();
+            return cardRows.filter(row => {
+              if (seenCards.has(row.fundCentreCode)) return false;
+              seenCards.add(row.fundCentreCode);
+              return true;
+            });
+          }
+
           const rows = [...document.querySelectorAll('tr')].map(tr => {
             const cells = [...tr.querySelectorAll('td')].map(td => text(td.innerText));
             if (cells.length < 4) return null;
@@ -397,6 +466,26 @@ async def scrape_live_funds(page):
         }
         """
     )
+    if len(funds) < MIN_EXPECTED_FUNDS:
+        diagnostics = await page.evaluate(
+            """
+            () => ({
+              bodyPreview: String(document.body?.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 1000),
+              tableRows: document.querySelectorAll('tr').length,
+              renderedCards: document.querySelectorAll('.minFsData').length,
+              scripts: document.querySelectorAll('script').length,
+              iframes: document.querySelectorAll('iframe').length,
+              downloadOptions: [...document.querySelectorAll('select.downloadtool_funds option')]
+                .filter(option => option.value && option.value !== 'AllFunds').length,
+              likelyCodes: (String(document.body?.innerText || '').match(/\\b[A-Z0-9]{4,6}\\b/g) || []).slice(0, 25)
+            })
+            """
+        )
+        print("Zurich fund-list diagnostics:", json.dumps(diagnostics, ensure_ascii=False), flush=True)
+        raise RuntimeError(f"Only {len(funds)} funds were found on the Zurich/FE fund centre page.")
+
+    print(f"Found {len(funds)} live Zurich/FE funds.", flush=True)
+    return funds
 
 
 async def scrape_history(page, fund):
@@ -440,6 +529,14 @@ async def scrape_history(page, fund):
                 if price_ok:
                     accepted = True
                     break
+
+        if parsed:
+            latest = parsed[0]
+            fund = {
+                **fund,
+                "price": fund.get("price") or latest["price"],
+                "priceDate": fund.get("priceDate") or display_date(latest["date"]),
+            }
 
         return {
             **fund,
