@@ -1,6 +1,11 @@
 name: Refresh Zurich fund data
 
 on:
+  push:
+    paths:
+      - ".github/workflows/refresh.yml"
+      - "scripts/update_zurich_funds.py"
+      - "scripts/encrypt_funds.py"
   schedule:
     - cron: "20 3 * * 1-5"
   workflow_dispatch:
@@ -10,11 +15,12 @@ permissions:
 
 concurrency:
   group: refresh-zurich-fund-data
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   refresh:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
