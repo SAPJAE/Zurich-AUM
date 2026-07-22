@@ -1,10 +1,16 @@
 import argparse
 import asyncio
+import io
 import json
 import math
 import re
+import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+import xml.etree.ElementTree as ET
 
 try:
     from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -15,8 +21,11 @@ except ModuleNotFoundError:
 
 
 SOURCE_URL = "https://digital.feprecisionplus.com/zilme/en-gb/ZILME"
+SOURCE_ORIGIN = "https://digital.feprecisionplus.com"
 DOWNLOAD_URL = "https://digital.feprecisionplus.com/zilme/en-gb/ZILME/DownloadTool?citicode={code}&historyType=price"
 MIN_EXPECTED_FUNDS = 150
+ACTIVE_PRICE_STALENESS_DAYS = 14
+HISTORY_YEARS = 5
 
 
 def numeric_from_display(value):
@@ -42,6 +51,316 @@ def display_date(value):
         return date.fromisoformat(str(value)).strftime("%d %b %Y")
     except ValueError:
         return str(value or "").strip()
+
+
+def direct_request(url, *, method="GET", data=None, headers=None, timeout=120):
+    default_headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
+        ),
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Referer": SOURCE_URL,
+        "X-Requested-With": "XMLHttpRequest",
+    }
+    if headers:
+        default_headers.update(headers)
+    body = data.encode("utf-8") if isinstance(data, str) else data
+    request = Request(url, data=body, headers=default_headers, method=method)
+    with urlopen(request, timeout=timeout) as response:
+        return response.read().decode("utf-8")
+
+
+def direct_request_bytes(url, *, method="GET", data=None, headers=None, timeout=120):
+    default_headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
+        ),
+        "Accept": "*/*",
+        "Referer": SOURCE_URL,
+        "X-Requested-With": "XMLHttpRequest",
+    }
+    if headers:
+        default_headers.update(headers)
+    body = data.encode("utf-8") if isinstance(data, str) else data
+    request = Request(url, data=body, headers=default_headers, method=method)
+    with urlopen(request, timeout=timeout) as response:
+        return response.read()
+
+
+def direct_json(url, *, method="GET", data=None, headers=None, timeout=120):
+    return json.loads(direct_request(url, method=method, data=data, headers=headers, timeout=timeout))
+
+
+def js_model_value(html, name):
+    match = re.search(rf"{re.escape(name)}\s*:\s*'([^']*)'", html)
+    if not match:
+        return None
+    return match.group(1)
+
+
+def zurich_feed_model(html):
+    model = {
+        "GrsProjectId": js_model_value(html, "GrsProjectId"),
+        "ProjectName": js_model_value(html, "ProjectName"),
+        "ToolId": "16",
+        "LanguageId": js_model_value(html, "InternalLanguageId") or js_model_value(html, "LanguageId"),
+        "LanguageCode": js_model_value(html, "LanguageCode"),
+        "forSaleIn": js_model_value(html, "forSaleIn") or "",
+        "FSIexclCT": js_model_value(html, "FSIexclCT") or "",
+        "DownloadToolFundOptionsUrl": js_model_value(html, "DownloadToolFundOptionsUrl"),
+        "PriceHistoryForAllFundsUrl": js_model_value(html, "PriceHistoryForAllFundsUrl"),
+        "CSVPriceHistoryUrl": js_model_value(html, "CSVPriceHistoryUrl"),
+    }
+    missing = [key for key, value in model.items() if value is None]
+    if missing:
+        raise RuntimeError(f"Zurich/FE page did not expose required model fields: {', '.join(missing)}")
+    return model
+
+
+def full_feed_url(path):
+    return path if str(path).startswith("http") else f"{SOURCE_ORIGIN}{path}"
+
+
+def fund_field(fund_info, *sections_and_keys):
+    for section, key in sections_and_keys:
+        section_value = fund_info.get(section) or {}
+        value = section_value.get(key)
+        if value not in (None, ""):
+            return value
+    return ""
+
+
+def citi_code_filter(fund_info):
+    sector = fund_field(
+        fund_info,
+        ("FundInfo", "SectorClassCode"),
+        ("Documents", "SectorClassCode"),
+        ("Common", "SectorClassCode"),
+    )
+    return {
+        "CitiCode": fund_field(
+            fund_info,
+            ("FundInfo", "CitiCode"),
+            ("Documents", "CitiCode"),
+            ("Common", "CitiCode"),
+        ),
+        "Universe": sector.split(":")[0] if isinstance(sector, str) and sector.strip() else None,
+        "FirstPriceDate": fund_field(
+            fund_info,
+            ("FundInfo", "FirstPriceDate"),
+            ("Documents", "FirstPriceDate"),
+            ("Common", "FirstPriceDate"),
+            ("Price", "FirstPriceDate"),
+        ),
+        "TypeCode": fund_field(
+            fund_info,
+            ("FundInfo", "TypeCode"),
+            ("Documents", "TypeCode"),
+            ("Common", "TypeCode"),
+        ),
+        "Currency": fund_field(fund_info, ("Price", "Currency_UnitLevel")),
+    }
+
+
+def direct_fund_row(fund_info):
+    return {
+        "name": fund_field(fund_info, ("Common", "Name"), ("Documents", "Name")),
+        "fundCentreCode": fund_field(
+            fund_info,
+            ("Common", "CitiCode"),
+            ("Documents", "CitiCode"),
+            ("FundInfo", "CitiCode"),
+        ),
+        "productType": "",
+        "price": "",
+        "priceDate": "",
+        "changePct": "",
+        "_bulkFilter": citi_code_filter(fund_info),
+        "_priceType": fund_field(fund_info, ("Price", "PriceType")),
+    }
+
+
+def cell_column(cell_ref):
+    match = re.match(r"([A-Z]+)", cell_ref or "")
+    if not match:
+        return ""
+    return match.group(1)
+
+
+def shared_strings_from_xlsx(zipped):
+    try:
+        xml = zipped.read("xl/sharedStrings.xml")
+    except KeyError:
+        return []
+    root = ET.fromstring(xml)
+    namespace = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    values = []
+    for item in root.findall("x:si", namespace):
+        values.append("".join(text.text or "" for text in item.findall(".//x:t", namespace)))
+    return values
+
+
+def parse_xlsx_price_history(content):
+    namespace = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    with zipfile.ZipFile(io.BytesIO(content)) as zipped:
+        shared_strings = shared_strings_from_xlsx(zipped)
+        sheet = ET.fromstring(zipped.read("xl/worksheets/sheet1.xml"))
+
+    rows = []
+    for row in sheet.findall(".//x:sheetData/x:row", namespace):
+        values = {}
+        for cell in row.findall("x:c", namespace):
+            value_node = cell.find("x:v", namespace)
+            if value_node is None:
+                continue
+            value = value_node.text or ""
+            if cell.get("t") == "s":
+                index = int(value)
+                value = shared_strings[index] if index < len(shared_strings) else ""
+            values[cell_column(cell.get("r"))] = value
+        price = numeric_from_display(values.get("A"))
+        parsed_date = parse_display_date(values.get("B"))
+        if price is None or not parsed_date:
+            continue
+        rows.append(
+            {
+                "price": price,
+                "date": parsed_date.isoformat(),
+                "currency": values.get("C", ""),
+            }
+        )
+    return rows
+
+
+def download_price_history_xlsx(model, fund):
+    filter_model = fund["_bulkFilter"]
+    history_filter = {
+        "CitiCode": filter_model["CitiCode"],
+        "Universe": filter_model["Universe"],
+        "TypeCode": filter_model["TypeCode"],
+        "FundName": fund["name"],
+        "BaseCurrency": filter_model["Currency"],
+        "PriceType": fund.get("_priceType") or "",
+        "TimePeriod": str(HISTORY_YEARS * 12),
+        "StartDate": None,
+        "EndDate": None,
+    }
+    search_model = {
+        "GrsProjectId": model["GrsProjectId"],
+        "ProjectName": model["ProjectName"],
+        "ToolId": model["ToolId"],
+        "LanguageId": model["LanguageId"],
+        "LanguageCode": model["LanguageCode"],
+        "forSaleIn": model["forSaleIn"],
+        "FSIexclCT": model["FSIexclCT"],
+    }
+    query = urlencode(
+        {
+            "modelString": json.dumps(search_model, separators=(",", ":")),
+            "filtersString": json.dumps(history_filter, separators=(",", ":")),
+        }
+    )
+    url = f"{full_feed_url(model['CSVPriceHistoryUrl'])}?{query}"
+    content = direct_request_bytes(
+        url,
+        headers={"Accept": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,*/*"},
+        timeout=120,
+    )
+    return parse_xlsx_price_history(content)
+
+
+def trim_to_last_years(rows, latest_date):
+    cutoff = latest_date - timedelta(days=365 * HISTORY_YEARS + 10)
+    trimmed = [row for row in rows if date.fromisoformat(row["date"]) >= cutoff]
+    return trimmed or rows
+
+
+def fetch_direct_zurich_histories():
+    html = direct_request(SOURCE_URL, headers={"Accept": "text/html,application/xhtml+xml"})
+    model = zurich_feed_model(html)
+    options_query = urlencode(
+        {
+            "GrsProjectId": model["GrsProjectId"],
+            "ProjectName": model["ProjectName"],
+            "ToolId": model["ToolId"],
+            "LanguageId": model["LanguageId"],
+            "LanguageCode": model["LanguageCode"],
+            "FSIexclCT": model["FSIexclCT"],
+            "forSaleIn": model["forSaleIn"],
+            "referrerToolId": "7",
+        }
+    )
+    fund_options = direct_json(f"{full_feed_url(model['DownloadToolFundOptionsUrl'])}?{options_query}")
+    fund_infos = fund_options.get("FundInfo") or []
+    funds = [direct_fund_row(fund_info) for fund_info in fund_infos]
+    funds = [fund for fund in funds if fund["name"] and fund["fundCentreCode"] and fund["_bulkFilter"]["CitiCode"]]
+
+    if len(funds) < MIN_EXPECTED_FUNDS:
+        raise RuntimeError(f"Only {len(funds)} funds were found in the Zurich/FE FundOptions feed.")
+
+    print(f"Found {len(funds)} Zurich/FE fund option records.", flush=True)
+    history_by_code = {}
+    errors = {}
+    completed = 0
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {executor.submit(download_price_history_xlsx, model, fund): fund for fund in funds}
+        for future in as_completed(futures):
+            fund = futures[future]
+            completed += 1
+            try:
+                history_by_code[fund["fundCentreCode"]] = future.result()
+            except Exception as exc:
+                errors[fund["fundCentreCode"]] = str(exc)
+                history_by_code[fund["fundCentreCode"]] = []
+            if completed % 20 == 0 or completed == len(funds):
+                print(f"Fetched {completed}/{len(funds)} direct Zurich price histories.", flush=True)
+
+    latest_dates = [
+        max(date.fromisoformat(row["date"]) for row in rows)
+        for rows in history_by_code.values()
+        if rows
+    ]
+    if not latest_dates:
+        raise RuntimeError("Zurich/FE direct price feed returned no usable price histories.")
+
+    source_date = max(latest_dates)
+    active_cutoff = source_date - timedelta(days=ACTIVE_PRICE_STALENESS_DAYS)
+    histories = []
+    inactive = 0
+    for fund in funds:
+        code = fund["fundCentreCode"]
+        rows = sorted(history_by_code.get(code, []), key=lambda row: row["date"])
+        if len(rows) < 2:
+            if code in errors:
+                print(f"History unavailable for {code}: {errors[code]}", flush=True)
+            inactive += 1
+            continue
+        latest = rows[-1]
+        latest_date = date.fromisoformat(latest["date"])
+        if latest_date < active_cutoff:
+            inactive += 1
+            continue
+        rows = trim_to_last_years(rows, latest_date)
+        clean_fund = {key: value for key, value in fund.items() if not key.startswith("_")}
+        histories.append(
+            {
+                **clean_fund,
+                "price": latest["price"],
+                "priceDate": display_date(latest["date"]),
+                "history": rows,
+                "historyAccepted": True,
+                "historyStatus": "direct Zurich/FE downloadable price history",
+            }
+        )
+
+    print(
+        f"Kept {len(histories)} active funds with price dates since {active_cutoff.isoformat()}; "
+        f"excluded {inactive} stale or empty histories.",
+        flush=True,
+    )
+    return histories
 
 
 def closest_on_or_before(rows, target_date):
@@ -554,23 +873,12 @@ async def scrape_history(page, fund):
 
 
 async def scrape_all(output_path):
-    if async_playwright is None:
-        raise RuntimeError("Playwright is required to refresh live Zurich fund data.")
-    async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch()
-        page = await browser.new_page(viewport={"width": 1440, "height": 1100})
-        funds = await scrape_live_funds(page)
-        if not funds:
-            raise RuntimeError("No funds were found on the Zurich/FE fund centre page.")
-
-        histories = []
-        for index, fund in enumerate(funds, start=1):
-            print(f"[{index}/{len(funds)}] {fund['fundCentreCode']} {fund['name']}", flush=True)
-            histories.append(await scrape_history(page, fund))
-            output_path.write_text(json.dumps(classify_funds(histories), indent=2, ensure_ascii=False), encoding="utf-8")
-
-        await browser.close()
-        return classify_funds(histories)
+    histories = fetch_direct_zurich_histories()
+    if not histories:
+        raise RuntimeError("No active Zurich/FE fund histories were found in the direct feed.")
+    classified = classify_funds(histories)
+    output_path.write_text(json.dumps(classified, indent=2, ensure_ascii=False), encoding="utf-8")
+    return classified
 
 
 async def main():
